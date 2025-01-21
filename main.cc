@@ -7,7 +7,8 @@
 void canvasToViewPort(int, int, double *);
 void intersectRaySphere(Vector3, Vector3, int, double *);
 Vector3 TraceRay(Vector3, Vector3, double, double);
-double ComputeLighting(Vector3, Vector3);
+double ComputeLighting(Vector3, Vector3, Vector3, double);
+Vector3 applyColorRangeCeiling(Vector3);
 
 // Set up the world (scene)
 
@@ -20,6 +21,7 @@ double pointLights[1];	   // Point lights
 Vector3 pointLightsPositions[1];
 double directionalLights[1];
 Vector3 directionalLightsDirections[1];
+double specular[4];
 
 // Image and viewport properties
 
@@ -45,6 +47,10 @@ int main()
 	pointLightsPositions[0] = Vector3(2, 1, 0);
 	directionalLights[0] = 0.2;
 	directionalLightsDirections[0] = Vector3(1, 4, 4);
+	specular[0] = 500;
+	specular[1] = 500;
+	specular[2] = 10;
+	specular[3] = 5000;
 
 	bool DEBUGGING = 0;
 	if (DEBUGGING) {
@@ -134,32 +140,64 @@ Vector3 TraceRay(Vector3 O, Vector3 D, double t_min, double t_max)
 	Vector3 P = O + D * closest_t;
 	Vector3 N = P + -spheres[closest_sphere];
 	N = N / (N.magnitude());
-	return colors[closest_sphere] * ComputeLighting(P, N); // Return the color based on the closest sphere determined and lighting
+	Vector3 result = colors[closest_sphere] * ComputeLighting(P, N, -D, specular[closest_sphere]); // Return the color based on the closest sphere determined and lighting
+	return applyColorRangeCeiling(result); // Ensure that color values stay at or below 255;
 }
 
-double ComputeLighting(Vector3 P, Vector3 N)
+double ComputeLighting(Vector3 P, Vector3 N, Vector3 V, double s)
 {	
 	double intensity = ambientLight;
 	Vector3 L;
-	double n_dot_1;
+	double n_dot_l;
 	for (int i = 0; i < 1; i++)
 	{ // Loop through all point lights
 		L = pointLightsPositions[i] + (-P);
-		n_dot_1 = dot(N, L);
-		if (n_dot_1 > 0)
+		n_dot_l = dot(N, L);
+
+		// Diffusion
+		if (n_dot_l > 0)
 		{
-			intensity += pointLights[i] * n_dot_1 / (N.magnitude() * L.magnitude());
+			intensity += pointLights[i] * n_dot_l / (N.magnitude() * L.magnitude());
+		}
+
+		// Specular
+		if (s >= 0)
+		{
+			Vector3 R = N * 2 * n_dot_l + (-L);
+			double r_dot_v = dot(R, V);
+			if (r_dot_v > 0)
+			{
+				intensity += pointLights[i] * pow(r_dot_v/(R.magnitude() * V.magnitude()), s);
+			}
 		}
 	}
 
 	for (int i = 0; i < 1; i++)
 	{ // Loop through all directional lights
 		L = directionalLightsDirections[i];
-		n_dot_1 = dot(N, L);
-		if (n_dot_1 > 0)
+		
+		// Diffusion
+		n_dot_l = dot(N, L);
+		if (n_dot_l > 0)
 		{
-			intensity += directionalLights[i] * n_dot_1 / (N.magnitude() * L.magnitude());
+			intensity += directionalLights[i] * n_dot_l / (N.magnitude() * L.magnitude());
+		}
+
+		// Specular
+		if (s >= 0)
+		{
+			Vector3 R = N * 2 * n_dot_l + (-L);
+			double r_dot_v = dot(R, V);
+			if (r_dot_v > 0)
+			{
+				intensity += directionalLights[i] * pow(r_dot_v/(R.magnitude() * V.magnitude()), s);
+			}
 		}
 	}
 	return intensity;
+}
+
+Vector3 applyColorRangeCeiling(Vector3 u)
+{
+	return Vector3(fmin(255, u.v[0]), fmin(255, u.v[1]), fmin(255, u.v[2]));
 }
