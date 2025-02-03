@@ -6,11 +6,12 @@
 
 void canvasToViewPort(int, int, double *);
 void intersectRaySphere(Vector3, Vector3, int, double *);
-Vector3 TraceRay(Vector3, Vector3, double, double, int);
+Vector3 TraceRay(Vector3, Vector3, double, double, int, int);
 double ComputeLighting(Vector3, Vector3, Vector3, double);
 Vector3 applyColorRangeCeiling(Vector3);
 void ClosestIntersection(Vector3, Vector3, double, double, double*, int*);
 Vector3 ReflectRay(Vector3, Vector3);
+Vector3 RefractRay(Vector3, Vector3, int, int);
 
 // Set up the world (scene)
 
@@ -25,6 +26,8 @@ double directionalLights[1];
 Vector3 directionalLightsDirections[1];
 double specular[4];
 double reflective[4];
+double opacity[4];
+double refraction[5];
 
 // Image and viewport properties
 
@@ -59,6 +62,18 @@ int main()
 	reflective[2] = 0.4;
 	reflective[3] = 0.5;
 
+	refraction[0] = 1.2;
+	refraction[1] = 1.33;
+	refraction[2] = 1.5;
+	refraction[3] = 1.7;
+	refraction[4] = 1; // Air/void
+
+	opacity[0] = 0.5;
+	opacity[1] = 0.5;
+	opacity[2] = 0.5;
+	opacity[3] = 0.5;
+
+	/*
 	bool DEBUGGING = 0;
 	if (DEBUGGING) {
 		int x = 254;
@@ -67,11 +82,11 @@ int main()
 		canvasToViewPort(x, y, cv);
 		printf("x: %d, y: %d, cvi: %lf, cvj: %lf\n", x, y, cv[0], cv[1]);
 		Vector3 V = Vector3(cv[0], cv[1], viewPortDistance);
-		Vector3 color = TraceRay(origin, V +(-origin), 1, INFINITY, 3);
+		Vector3 color = TraceRay(origin, V +(-origin), 1, INFINITY, 3, 3);
 		printf("V: %lf, %lf, %lf\nTraceRay color: %lf, %lf, %lf\n", V.v[0], V.v[1], V.v[2], color.v[0], color.v[1], color.v[2]);
 		return 0;
 	}
-
+	*/
 
 	// Render
 
@@ -83,7 +98,7 @@ int main()
 			double transformation[2]; // array to hold the result of transofrmation
 			canvasToViewPort(i, j, transformation);
 			Vector3 V = Vector3(transformation[0], transformation[1], viewPortDistance); // Calculate the V vector
-			Vector3 color = TraceRay(origin, V + (-origin), 1, INFINITY, 3);				 // Find the color of the pixel based on the ray and intersection with the spheres and light
+			Vector3 color = TraceRay(origin, V + (-origin), 1, INFINITY, 3, 3); // Find the color of the pixel based on the ray and intersection with the spheres and light
 			int index = (j * image_width + i) * 3; // Pixel location in the file
 			image[index + 2] = (uint8_t)color.v[0];
 			image[index + 1] = (uint8_t)color.v[1];
@@ -122,30 +137,42 @@ void intersectRaySphere(Vector3 O, Vector3 D, int sphereID, double *res)
 	return;
 }
 
-Vector3 TraceRay(Vector3 O, Vector3 D, double t_min, double t_max, int recursion_depth)
+Vector3 TraceRay(Vector3 O, Vector3 D, double t_min, double t_max, int recursion_depth, int current_medium_eta_id)
 {
-	double closest_t = INFINITY;
-	int closest_sphere = -1; // -1 is used instead of null
+	double closest_t;
+	int closest_sphere;
 	ClosestIntersection(O, D, t_min, t_max, &closest_t, &closest_sphere);
 	if(closest_sphere == -1) {
 		return colors[4];
 	}
 	Vector3 P = O + D * closest_t;
-	Vector3 N = P + -spheres[closest_sphere];
+	Vector3 N = P + -spheres[closest_sphere]; // Vector that is normal to the surface at point P
 	N = N / (N.magnitude());
 	Vector3 local_color = colors[closest_sphere] * ComputeLighting(P, N, -D, specular[closest_sphere]); // Return the color based on the closest sphere determined and lighting
 
-	double r = reflective[closest_sphere];
+	const double r = reflective[closest_sphere];
 
-	if (recursion_depth <= 0 || r <= 0) {
-		return applyColorRangeCeiling(local_color); // limit color values to 255 at most
+	Vector3 result;
+	Vector3 refracted_color;
+	Vector3 reflected_color;
+	if (recursion_depth <= 0)
+	{
+		result = applyColorRangeCeiling(local_color);
+		return result;
+	}
+	if (r > 0)
+	{
+		Vector3 R = ReflectRay(-D, N);
+		reflected_color = TraceRay(P, R, 0.001, INFINITY, recursion_depth -1, current_medium_eta_id);
+	}
+	if (opacity[closest_sphere] != 1)
+	{
+		Vector3 R_prime = RefractRay(P, N, current_medium_eta_id, closest_sphere);
+		refracted_color = TraceRay(P, R_prime, 0.001, INFINITY, recursion_depth - 1, closest_sphere);
 	}
 
-	Vector3 R = ReflectRay(-D, N);
-	Vector3 reflected_color = TraceRay(P, R, 0.001, INFINITY, recursion_depth -1);
-	Vector3 result = local_color * (1-r) + reflected_color * r;
-
-	return applyColorRangeCeiling(result); // Ensure that color values stay at or below 255;
+	result = refracted_color * (1-opacity[closest_sphere]) + reflected_color * r + local_color * (opacity[closest_sphere] - r);
+	return applyColorRangeCeiling(result);
 }
 
 double ComputeLighting(Vector3 P, Vector3 N, Vector3 V, double s)
@@ -171,7 +198,7 @@ double ComputeLighting(Vector3 P, Vector3 N, Vector3 V, double s)
 		// Diffusion
 		if (n_dot_l > 0)
 		{
-			intensity += pointLights[i] * n_dot_l / (N.magnitude() * L.magnitude());
+			intensity += pointLights[i] * n_dot_l / (N.magnitude() * L.magnitude()); // Light intensity into cosine of angle between N and L
 		}
 
 		// Specular
@@ -247,6 +274,16 @@ void ClosestIntersection(Vector3 O, Vector3 D, double t_min, double t_max, doubl
 	return;
 }
 
-Vector3 ReflectRay(Vector3 R, Vector3 N) {
+Vector3 ReflectRay(Vector3 R, Vector3 N)
+{
 	return N * dot(N, R) * 2  + (-R);
+}
+
+Vector3 RefractRay(Vector3 P, Vector3 N, int current_medium_eta_id, int closest_sphere)
+{
+	const Vector3 P_unit = P / P.magnitude();
+	Vector3 R_prime_perpendicular = (P_unit + N*(dot(-(P_unit), N))) * refraction[current_medium_eta_id]/refraction[closest_sphere];
+	Vector3 R_prime_parallel = N*(-sqrt(1 - (R_prime_perpendicular.magnitude())));
+	Vector3 R_prime = R_prime_parallel + R_prime_perpendicular;
+	return R_prime;
 }
